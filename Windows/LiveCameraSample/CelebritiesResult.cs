@@ -49,6 +49,6 @@ namespace LiveCameraSample
     {
         public string Name { get; set; }
         public FaceRectangle FaceRectangle { get; set; }
-        public float Confidence { get; set; }
+        public double Confidence { get; set; }
     }
 }

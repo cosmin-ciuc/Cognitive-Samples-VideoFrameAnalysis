@@ -120,19 +120,19 @@ namespace LiveCameraSample
                         face.FaceRectangle.Width, face.FaceRectangle.Height);
                     string text = "";
 
+                    if (celebName?[i] != null)
+                    {
+                        text += celebName[i];
+                    }
+                    
                     if (face.FaceAttributes != null)
                     {
-                        text += Aggregation.SummarizeFaceAttributes(face.FaceAttributes);
+                        text += " " + Aggregation.SummarizeFaceAttributes(face.FaceAttributes);
                     }
 
                     if (emotionScores?[i] != null)
                     {
-                        text += Aggregation.SummarizeEmotion(emotionScores[i]);
-                    }
-
-                    if (celebName?[i] != null)
-                    {
-                        text += celebName[i];
+                        text += " " + Aggregation.SummarizeEmotion(emotionScores[i]);
                     }
 
                     faceRect.Inflate(6 * annotationScale, 6 * annotationScale);

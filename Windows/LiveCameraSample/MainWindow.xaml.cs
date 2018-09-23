@@ -34,7 +34,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -75,24 +74,32 @@ namespace LiveCameraSample
 
         public string PersonImageFilename
         {
-            get { return (string)GetValue(PersonImageFilenameProperty); }
-            set { SetValue(PersonImageFilenameProperty, value); }
+            get => (string)GetValue(PersonImageFilenameProperty);
+            set => SetValue(PersonImageFilenameProperty, value);
         }
 
         public static readonly DependencyProperty PersonsListProperty = DependencyProperty.Register("PersonsList", typeof(ObservableCollection<Person>), typeof(MainWindow), new UIPropertyMetadata(new ObservableCollection<Person>()));
 
         public ObservableCollection<Person> PersonsList
         {
-            get { return (ObservableCollection<Person>)GetValue(PersonsListProperty); }
-            set { SetValue(PersonsListProperty, value); }
+            get => (ObservableCollection<Person>)GetValue(PersonsListProperty);
+            set => SetValue(PersonsListProperty, value);
         }
 
         public static readonly DependencyProperty SelectedPersonIdProperty = DependencyProperty.Register("SelectedPersonId", typeof(Guid), typeof(MainWindow), new UIPropertyMetadata(Guid.Empty));
 
         public Guid SelectedPersonId
         {
-            get { return (Guid)GetValue(SelectedPersonIdProperty); }
-            set { SetValue(SelectedPersonIdProperty, value); }
+            get => (Guid)GetValue(SelectedPersonIdProperty);
+            set => SetValue(SelectedPersonIdProperty, value);
+        }
+
+        public static readonly DependencyProperty IdentifiedPersonsProperty = DependencyProperty.Register("IdentifiedPersons", typeof(ObservableCollection<IdentifiedPerson>), typeof(MainWindow), new UIPropertyMetadata(new ObservableCollection<IdentifiedPerson>()));
+
+        public ObservableCollection<IdentifiedPerson> IdentifiedPersons
+        {
+            get => (ObservableCollection<IdentifiedPerson>)GetValue(IdentifiedPersonsProperty);
+            set => SetValue(IdentifiedPersonsProperty, value);
         }
 
         public enum AppMode
@@ -101,7 +108,8 @@ namespace LiveCameraSample
             Emotions,
             EmotionsWithClientFaceDetect,
             Tags,
-            Celebrities
+            Celebrities,
+            Persons
         }
 
         public MainWindow()
@@ -183,6 +191,18 @@ namespace LiveCameraSample
                     else
                     {
                         _latestResultsToDisplay = e.Analysis;
+                        if (e.Analysis.Persons != null && e.Analysis.Persons.Any(person => !string.IsNullOrEmpty(person.Name)))
+                        {
+                            foreach (var analysisPerson in e.Analysis.Persons.Where(person => !string.IsNullOrEmpty(person.Name)))
+                            {
+                                IdentifiedPersons.Add(new IdentifiedPerson
+                                {
+                                    Confidence = analysisPerson.Confidence,
+                                    FrameIndex = e.Frame.Metadata.Index,
+                                    PersonName = analysisPerson.Name
+                                });
+                            }
+                        }
 
                         // Display the image and visualization in the right pane. 
                         if (!_fuseClientRemoteResults)
@@ -213,39 +233,57 @@ namespace LiveCameraSample
         ///     and containing the faces returned by the API. </returns>
         private async Task<LiveCameraResult> FacesAnalysisFunction(VideoFrameAnalyzer.VideoFrame frame)
         {
-            var personsList = new List<Person>();
-            Dispatcher.Invoke(() => personsList = PersonsList.ToList());
             // Encode image. 
             var jpg = frame.Image.ToMemoryStream(".jpg", s_jpegParams);
             // Submit image to API. 
             var attrs = new List<FaceAPI.FaceAttributeType> {
                 //FaceAPI.FaceAttributeType.Age,
                 FaceAPI.FaceAttributeType.Gender,
-                //FaceAPI.FaceAttributeType.HeadPose
+                FaceAPI.FaceAttributeType.HeadPose
             };
             var faces = await _faceClient.DetectAsync(jpg, returnFaceAttributes: attrs);
             // Count the API call. 
             Dispatcher.Invoke(() => Properties.Settings.Default.FaceAPICallCount++);
 
-            var names = new string[faces.Length];
-            if (faces.Any())
+            // Output. 
+            return new LiveCameraResult
+            {
+                Faces = faces 
+            };
+        }
+
+        private async Task<LiveCameraResult> PersonIdentificationFunction(VideoFrameAnalyzer.VideoFrame frame)
+        {
+            var facesDetectionResult = await FacesAnalysisFunction(frame);
+            var personsList = new List<Person>();
+            Dispatcher.Invoke(() => personsList = PersonsList.ToList());
+            var celebrities = new Celebrity[facesDetectionResult.Faces.Length];
+            if (facesDetectionResult.Faces.Any())
             {
                 var identifiedPersons = await _faceClient.IdentifyAsync(
-                    faces.Select(face => face.FaceId).ToArray(),
+                    facesDetectionResult.Faces.Select(face => face.FaceId).ToArray(),
                     "oana_si_pepe");
                 // Count the API call. 
                 Dispatcher.Invoke(() => Properties.Settings.Default.FaceAPICallCount++);
-                for (var faceIdx = 0; faceIdx < faces.Length; faceIdx++)
+                for (var faceIdx = 0; faceIdx < facesDetectionResult.Faces.Length; faceIdx++)
                 {
-                    var identifiedPerson = identifiedPersons.FirstOrDefault(ip => ip.FaceId == faces[faceIdx].FaceId && ip.Candidates.Any());
+                    var identifiedPerson = identifiedPersons.FirstOrDefault(ip => ip.FaceId == facesDetectionResult.Faces[faceIdx].FaceId && ip.Candidates.Any());
                     if (identifiedPerson != null)
                     {
-                        names[faceIdx] =
-                            $" {personsList.FirstOrDefault(person => person.PersonId == identifiedPerson.Candidates[0].PersonId)?.Name ?? "Unknown"}";
+                        var firstCandidate = identifiedPerson.Candidates[0];
+                        celebrities[faceIdx] = new Celebrity
+                        {
+                            Confidence = firstCandidate.Confidence,
+                            Name = personsList.FirstOrDefault(person => person.PersonId == firstCandidate.PersonId)?.Name ?? string.Empty
+                        };
                     }
                     else
                     {
-                        names[faceIdx] = " Unknown";
+                        celebrities[faceIdx] = new Celebrity
+                        {
+                            Confidence = 0.0,
+                            Name = string.Empty
+                        };
                     }
                 }
             }
@@ -253,8 +291,9 @@ namespace LiveCameraSample
             // Output. 
             return new LiveCameraResult
             {
-                Faces = faces, 
-                CelebrityNames = names
+                Faces = facesDetectionResult.Faces,
+                CelebrityNames = celebrities.Select(celebrity => celebrity.Name).ToArray(),
+                Persons = celebrities
             };
         }
 
@@ -275,7 +314,7 @@ namespace LiveCameraSample
             {
                 // If localFaces is null, we're not performing local face detection.
                 // Use Cognigitve Services to do the face detection.
-                Properties.Settings.Default.FaceAPICallCount++;
+                Dispatcher.Invoke(() => Properties.Settings.Default.FaceAPICallCount++);
                 faces = await _faceClient.DetectAsync(
                     jpg,
                     /* returnFaceId= */ false,
@@ -308,7 +347,7 @@ namespace LiveCameraSample
             // Submit image to API. 
             var analysis = await _visionClient.GetTagsAsync(jpg);
             // Count the API call. 
-            Properties.Settings.Default.VisionAPICallCount++;
+            Dispatcher.Invoke(() => Properties.Settings.Default.VisionAPICallCount++);
             // Output. 
             return new LiveCameraResult { Tags = analysis.Tags };
         }
@@ -325,7 +364,7 @@ namespace LiveCameraSample
             // Submit image to API. 
             var result = await _visionClient.AnalyzeImageInDomainAsync(jpg, "celebrities");
             // Count the API call. 
-            Properties.Settings.Default.VisionAPICallCount++;
+            Dispatcher.Invoke(() => Properties.Settings.Default.VisionAPICallCount++);
             // Output. 
             var celebs = JsonConvert.DeserializeObject<CelebritiesResult>(result.Result.ToString()).Celebrities;
             return new LiveCameraResult
@@ -422,6 +461,9 @@ namespace LiveCameraSample
                 case AppMode.Celebrities:
                     _grabber.AnalysisFunction = CelebrityAnalysisFunction;
                     break;
+                case AppMode.Persons:
+                    _grabber.AnalysisFunction = PersonIdentificationFunction;
+                    break;
                 default:
                     _grabber.AnalysisFunction = null;
                     break;
@@ -450,6 +492,8 @@ namespace LiveCameraSample
 
             // Reset message. 
             MessageArea.Text = "";
+
+            IdentifiedPersons.Clear();
 
             // Record start time, for auto-stop
             _startTime = DateTime.Now;
