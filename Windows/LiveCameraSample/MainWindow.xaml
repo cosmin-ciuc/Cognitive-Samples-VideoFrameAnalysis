@@ -9,18 +9,29 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="35" />
+            <RowDefinition Height="35" />
             <RowDefinition Height="*" />
             <RowDefinition Height="35" />
         </Grid.RowDefinitions>
         <StackPanel Orientation="Horizontal" Grid.Row="0" Name="ButtonBar">
             <ComboBox x:Name="CameraList" Width="100" Margin="5,5,0,5" Loaded="CameraList_Loaded" />
             <Button Content="Start Camera" Padding="5,0" Margin="5,5,0,5" Click="StartButton_Click" />
-            <Button Content="Stop Camera" Padding="5,0" Margin="5,5,0,5" Click="StopButton_Click" />
+            <Button Content="Start Processing File" Padding="5,0" Margin="5,5,0,5" Click="StartFileButton_Click" />
+            <Button Content="Stop Processing" Padding="5,0" Margin="5,5,0,5" Click="StopButton_Click" />
             <TextBlock VerticalAlignment="Center" Margin="15,5,0,5" Text="Mode:" />
             <ComboBox x:Name="ModeList" Width="100" Margin="5,5,0,5" Loaded="ModeList_Loaded" SelectionChanged="ModeList_SelectionChanged" />
         </StackPanel>
         <Button Content="Show/Hide Settings" Padding="5,0" Margin="5" Click="SettingsButton_Click" HorizontalAlignment="Right" />
-        <Grid Grid.Row="1">
+        <StackPanel Orientation="Horizontal" Grid.Row="1" Name="ModelTrainingBar">
+            <Button Content="Load Persons" Padding="5,0" Margin="5,5,0,5" Click="LoadPersons_OnClick"/>
+            <TextBlock VerticalAlignment="Center" Margin="15,5,0,5" Text="Person:" />
+            <ComboBox Width="100" Margin="5,5,0,5" ItemsSource="{Binding PersonsList, Mode=OneWay}" SelectedValuePath="PersonId" DisplayMemberPath="Name" SelectedValue="{Binding SelectedPersonId}"/>
+            <Button Content="Select image file" Padding="5,0" Margin="5,5,0,5" Click="SelectPersonImageFile_OnClick"/>
+            <TextBlock VerticalAlignment="Center" Margin="15,5,0,5" Text="{Binding PersonImageFilename, Mode=OneWay}" />
+            <Button Content="Upload image file" Padding="5,0" Margin="5,5,0,5" Click="UploadImageFile_OnClick"/>
+            <Button Content="Retrain" Padding="5,0" Margin="5,5,0,5" Click="Retrain_OnClick"/>
+        </StackPanel>
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
@@ -66,6 +77,6 @@
                 <Button Margin="5" Content="Save" Click="SaveSettingsButton_Click" />
             </StackPanel>
         </Grid>
-        <TextBlock Name="MessageArea" Margin="5" Grid.Row="2" VerticalAlignment="Center" />
+        <TextBlock Name="MessageArea" Margin="5" Grid.Row="3" VerticalAlignment="Center" />
     </Grid>
 </Window>

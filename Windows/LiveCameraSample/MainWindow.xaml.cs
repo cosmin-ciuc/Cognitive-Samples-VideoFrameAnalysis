@@ -33,17 +33,21 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
+using Microsoft.ProjectOxford.Face.Contract;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using OpenCvSharp;
 using OpenCvSharp.Extensions;
-using VideoFrameAnalyzer;
 using Common = Microsoft.ProjectOxford.Common;
 using FaceAPI = Microsoft.ProjectOxford.Face;
 using VisionAPI = Microsoft.ProjectOxford.Vision;
@@ -57,7 +61,7 @@ namespace LiveCameraSample
     {
         private FaceAPI.FaceServiceClient _faceClient = null;
         private VisionAPI.VisionServiceClient _visionClient = null;
-        private readonly FrameGrabber<LiveCameraResult> _grabber = null;
+        private readonly VideoFrameAnalyzer.FrameGrabber<LiveCameraResult> _grabber = null;
         private static readonly ImageEncodingParam[] s_jpegParams = {
             new ImageEncodingParam(ImwriteFlags.JpegQuality, 60)
         };
@@ -66,6 +70,30 @@ namespace LiveCameraSample
         private LiveCameraResult _latestResultsToDisplay = null;
         private AppMode _mode;
         private DateTime _startTime;
+
+        public static readonly DependencyProperty PersonImageFilenameProperty = DependencyProperty.Register("PersonImageFilename", typeof(string), typeof(MainWindow));
+
+        public string PersonImageFilename
+        {
+            get { return (string)GetValue(PersonImageFilenameProperty); }
+            set { SetValue(PersonImageFilenameProperty, value); }
+        }
+
+        public static readonly DependencyProperty PersonsListProperty = DependencyProperty.Register("PersonsList", typeof(ObservableCollection<Person>), typeof(MainWindow), new UIPropertyMetadata(new ObservableCollection<Person>()));
+
+        public ObservableCollection<Person> PersonsList
+        {
+            get { return (ObservableCollection<Person>)GetValue(PersonsListProperty); }
+            set { SetValue(PersonsListProperty, value); }
+        }
+
+        public static readonly DependencyProperty SelectedPersonIdProperty = DependencyProperty.Register("SelectedPersonId", typeof(Guid), typeof(MainWindow), new UIPropertyMetadata(Guid.Empty));
+
+        public Guid SelectedPersonId
+        {
+            get { return (Guid)GetValue(SelectedPersonIdProperty); }
+            set { SetValue(SelectedPersonIdProperty, value); }
+        }
 
         public enum AppMode
         {
@@ -81,7 +109,7 @@ namespace LiveCameraSample
             InitializeComponent();
 
             // Create grabber. 
-            _grabber = new FrameGrabber<LiveCameraResult>();
+            _grabber = new VideoFrameAnalyzer.FrameGrabber<LiveCameraResult>();
 
             // Set up a listener for when the client receives a new frame.
             _grabber.NewFrameProvided += (s, e) =>
@@ -99,13 +127,16 @@ namespace LiveCameraSample
                 this.Dispatcher.BeginInvoke((Action)(() =>
                 {
                     // Display the image in the left pane.
-                    LeftImage.Source = e.Frame.Image.ToBitmapSource();
-
-                    // If we're fusing client-side face detection with remote analysis, show the
-                    // new frame now with the most recent analysis available. 
-                    if (_fuseClientRemoteResults)
+                    if (!e.Frame.Image.Empty())
                     {
-                        RightImage.Source = VisualizeResult(e.Frame);
+                        LeftImage.Source = e.Frame.Image.ToBitmapSource();
+
+                        // If we're fusing client-side face detection with remote analysis, show the
+                        // new frame now with the most recent analysis available. 
+                        if (_fuseClientRemoteResults)
+                        {
+                            RightImage.Source = VisualizeResult(e.Frame);
+                        }
                     }
                 }));
 
@@ -164,34 +195,74 @@ namespace LiveCameraSample
 
             // Create local face detector. 
             _localFaceDetector.Load("Data/haarcascade_frontalface_alt2.xml");
+
+            Properties.Settings.Default.FaceAPIKey = Properties.Settings.Default.FaceAPIKey.Trim();
+            _faceClient = new FaceAPI.FaceServiceClient(Properties.Settings.Default.FaceAPIKey, Properties.Settings.Default.FaceAPIHost);
+
+            DataContext = this;
+        }
+
+        private Task<Person[]> RetrievePersonsListAsync()
+        {
+            return _faceClient.ListPersonsInPersonGroupAsync("oana_si_pepe");
         }
 
         /// <summary> Function which submits a frame to the Face API. </summary>
         /// <param name="frame"> The video frame to submit. </param>
         /// <returns> A <see cref="Task{LiveCameraResult}"/> representing the asynchronous API call,
         ///     and containing the faces returned by the API. </returns>
-        private async Task<LiveCameraResult> FacesAnalysisFunction(VideoFrame frame)
+        private async Task<LiveCameraResult> FacesAnalysisFunction(VideoFrameAnalyzer.VideoFrame frame)
         {
+            var personsList = new List<Person>();
+            Dispatcher.Invoke(() => personsList = PersonsList.ToList());
             // Encode image. 
             var jpg = frame.Image.ToMemoryStream(".jpg", s_jpegParams);
             // Submit image to API. 
             var attrs = new List<FaceAPI.FaceAttributeType> {
-                FaceAPI.FaceAttributeType.Age,
+                //FaceAPI.FaceAttributeType.Age,
                 FaceAPI.FaceAttributeType.Gender,
-                FaceAPI.FaceAttributeType.HeadPose
+                //FaceAPI.FaceAttributeType.HeadPose
             };
             var faces = await _faceClient.DetectAsync(jpg, returnFaceAttributes: attrs);
             // Count the API call. 
-            Properties.Settings.Default.FaceAPICallCount++;
+            Dispatcher.Invoke(() => Properties.Settings.Default.FaceAPICallCount++);
+
+            var names = new string[faces.Length];
+            if (faces.Any())
+            {
+                var identifiedPersons = await _faceClient.IdentifyAsync(
+                    faces.Select(face => face.FaceId).ToArray(),
+                    "oana_si_pepe");
+                // Count the API call. 
+                Dispatcher.Invoke(() => Properties.Settings.Default.FaceAPICallCount++);
+                for (var faceIdx = 0; faceIdx < faces.Length; faceIdx++)
+                {
+                    var identifiedPerson = identifiedPersons.FirstOrDefault(ip => ip.FaceId == faces[faceIdx].FaceId && ip.Candidates.Any());
+                    if (identifiedPerson != null)
+                    {
+                        names[faceIdx] =
+                            $" {personsList.FirstOrDefault(person => person.PersonId == identifiedPerson.Candidates[0].PersonId)?.Name ?? "Unknown"}";
+                    }
+                    else
+                    {
+                        names[faceIdx] = " Unknown";
+                    }
+                }
+            }
+
             // Output. 
-            return new LiveCameraResult { Faces = faces };
+            return new LiveCameraResult
+            {
+                Faces = faces, 
+                CelebrityNames = names
+            };
         }
 
         /// <summary> Function which submits a frame to the Emotion API. </summary>
         /// <param name="frame"> The video frame to submit. </param>
         /// <returns> A <see cref="Task{LiveCameraResult}"/> representing the asynchronous API call,
         ///     and containing the emotions returned by the API. </returns>
-        private async Task<LiveCameraResult> EmotionAnalysisFunction(VideoFrame frame)
+        private async Task<LiveCameraResult> EmotionAnalysisFunction(VideoFrameAnalyzer.VideoFrame frame)
         {
             // Encode image. 
             var jpg = frame.Image.ToMemoryStream(".jpg", s_jpegParams);
@@ -230,7 +301,7 @@ namespace LiveCameraSample
         /// <param name="frame"> The video frame to submit. </param>
         /// <returns> A <see cref="Task{LiveCameraResult}"/> representing the asynchronous API call,
         ///     and containing the tags returned by the API. </returns>
-        private async Task<LiveCameraResult> TaggingAnalysisFunction(VideoFrame frame)
+        private async Task<LiveCameraResult> TaggingAnalysisFunction(VideoFrameAnalyzer.VideoFrame frame)
         {
             // Encode image. 
             var jpg = frame.Image.ToMemoryStream(".jpg", s_jpegParams);
@@ -247,7 +318,7 @@ namespace LiveCameraSample
         /// <param name="frame"> The video frame to submit. </param>
         /// <returns> A <see cref="Task{LiveCameraResult}"/> representing the asynchronous API call,
         ///     and containing the celebrities returned by the API. </returns>
-        private async Task<LiveCameraResult> CelebrityAnalysisFunction(VideoFrame frame)
+        private async Task<LiveCameraResult> CelebrityAnalysisFunction(VideoFrameAnalyzer.VideoFrame frame)
         {
             // Encode image. 
             var jpg = frame.Image.ToMemoryStream(".jpg", s_jpegParams);
@@ -266,7 +337,7 @@ namespace LiveCameraSample
             };
         }
 
-        private BitmapSource VisualizeResult(VideoFrame frame)
+        private BitmapSource VisualizeResult(VideoFrameAnalyzer.VideoFrame frame)
         {
             // Draw any results on top of the image. 
             BitmapSource visImage = frame.Image.ToBitmapSource();
@@ -287,6 +358,8 @@ namespace LiveCameraSample
 
                 visImage = Visualization.DrawFaces(visImage, result.Faces, result.EmotionScores, result.CelebrityNames);
                 visImage = Visualization.DrawTags(visImage, result.Tags);
+
+                MessageArea.Text = $"Frame index: {frame.Metadata.Index}";
             }
 
             return visImage;
@@ -355,6 +428,33 @@ namespace LiveCameraSample
             }
         }
 
+        private async Task StartProcessing()
+        {
+            // Clean leading/trailing spaces in API keys. 
+            Properties.Settings.Default.VisionAPIKey = Properties.Settings.Default.VisionAPIKey.Trim();
+
+            // Create API clients. 
+            _visionClient = new VisionAPI.VisionServiceClient(Properties.Settings.Default.VisionAPIKey, Properties.Settings.Default.VisionAPIHost);
+
+            // How often to analyze. 
+            _grabber.TriggerAnalysisOnInterval(Properties.Settings.Default.AnalysisInterval);
+
+            if (!PersonsList.Any())
+            {
+                var persons = await RetrievePersonsListAsync();
+                foreach (var person in persons)
+                {
+                    PersonsList.Add(person);
+                }
+            }            
+
+            // Reset message. 
+            MessageArea.Text = "";
+
+            // Record start time, for auto-stop
+            _startTime = DateTime.Now;
+        }
+
         private async void StartButton_Click(object sender, RoutedEventArgs e)
         {
             if (!CameraList.HasItems)
@@ -363,24 +463,22 @@ namespace LiveCameraSample
                 return;
             }
 
-            // Clean leading/trailing spaces in API keys. 
-            Properties.Settings.Default.FaceAPIKey = Properties.Settings.Default.FaceAPIKey.Trim();
-            Properties.Settings.Default.VisionAPIKey = Properties.Settings.Default.VisionAPIKey.Trim();
-
-            // Create API clients. 
-            _faceClient = new FaceAPI.FaceServiceClient(Properties.Settings.Default.FaceAPIKey, Properties.Settings.Default.FaceAPIHost);
-            _visionClient = new VisionAPI.VisionServiceClient(Properties.Settings.Default.VisionAPIKey, Properties.Settings.Default.VisionAPIHost);
-
-            // How often to analyze. 
-            _grabber.TriggerAnalysisOnInterval(Properties.Settings.Default.AnalysisInterval);
-
-            // Reset message. 
-            MessageArea.Text = "";
-
-            // Record start time, for auto-stop
-            _startTime = DateTime.Now;
+            await StartProcessing();
 
             await _grabber.StartProcessingCameraAsync(CameraList.SelectedIndex);
+        }
+
+        private async void StartFileButton_Click(object sender, RoutedEventArgs e)
+        {
+            await StartProcessing();
+            var openFileDialog = new OpenFileDialog();
+            openFileDialog.Filter = "Video files (*.avi; *.mp4)|*.avi;*.mp4|All files (*.*)|*.*";
+            openFileDialog.Multiselect = false;
+            openFileDialog.Title = "Select video file to process";
+            if (openFileDialog.ShowDialog() == true)
+            {
+                await _grabber.StartProcessingVideoFileAsync(openFileDialog.FileName);
+            }            
         }
 
         private async void StopButton_Click(object sender, RoutedEventArgs e)
@@ -471,6 +569,61 @@ namespace LiveCameraSample
                 OpenCvSharp.Rect r = sortedClientRects[i];
                 sortedResultFaces[i].FaceRectangle = new FaceAPI.Contract.FaceRectangle { Left = r.Left, Top = r.Top, Width = r.Width, Height = r.Height };
             }
+        }
+
+        private async void LoadPersons_OnClick(object sender, RoutedEventArgs e)
+        {
+            var persons = await RetrievePersonsListAsync();
+            PersonsList.Clear();
+            foreach (var person in persons)
+            {
+                PersonsList.Add(person);
+            }
+        }
+
+        private void SelectPersonImageFile_OnClick(object sender, RoutedEventArgs e)
+        {
+            var openFileDialog = new OpenFileDialog();
+            openFileDialog.Multiselect = false;
+            openFileDialog.Filter = "Image files (*.jpg; *.bmp; *.png)|*.jpg;*.bmp;*.png|All files (*.*)|*.*";
+            if (openFileDialog.ShowDialog() == true)
+            {
+                PersonImageFilename = openFileDialog.FileName;
+            }
+        }
+
+        private async void UploadImageFile_OnClick(object sender, RoutedEventArgs e)
+        {
+            if (SelectedPersonId == Guid.Empty)
+            {
+                MessageBox.Show("Select a person first!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(PersonImageFilename))
+            {
+                MessageBox.Show("Select an image file!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            using (var fileStream = File.Open(PersonImageFilename, FileMode.Open, FileAccess.Read))
+            {
+                try
+                {
+                    var persistedFaceResult = await _faceClient.AddPersonFaceInPersonGroupAsync("oana_si_pepe", SelectedPersonId, fileStream);
+                    PersonImageFilename = string.Empty;
+                }
+                catch (FaceAPI.FaceAPIException faceApiException)
+                {
+                    MessageBox.Show(faceApiException.ErrorMessage, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                fileStream.Close();
+            }            
+        }
+
+        private async void Retrain_OnClick(object sender, RoutedEventArgs e)
+        {
+            await _faceClient.TrainPersonGroupAsync("oana_si_pepe");
         }
     }
 }

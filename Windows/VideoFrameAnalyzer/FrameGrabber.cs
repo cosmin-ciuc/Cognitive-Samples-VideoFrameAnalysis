@@ -43,6 +43,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 using OpenCvSharp;
 
 namespace VideoFrameAnalyzer
@@ -138,6 +139,9 @@ namespace VideoFrameAnalyzer
         protected int _numCameras = -1;
         protected int _currCameraIdx = -1;
         protected double _fps = 0;
+        protected string _currVideoFile = null;
+        protected BlockingCollection<VideoFrame> framesToAnalyzeQueue = null;
+        protected Task analyzerTask = null;
 
         #endregion Fields
 
@@ -186,6 +190,33 @@ namespace VideoFrameAnalyzer
             _currCameraIdx = cameraIndex;
         }
 
+        public async Task StartProcessingVideoFileAsync(string videoFilePath, double overrideFPS = 0)
+        {
+            // Check to see if we're re-opening the same camera. 
+            if (_reader != null && _reader.CaptureType == CaptureType.File && videoFilePath == _currVideoFile)
+            {
+                return;
+            }
+
+            await StopProcessingAsync().ConfigureAwait(false);
+
+            _reader = new VideoCapture(videoFilePath);
+
+            _fps = overrideFPS;
+
+            if (_fps == 0)
+            {
+                _fps = 30;
+            }
+
+            Width = _reader.FrameWidth;
+            Height = _reader.FrameHeight;
+
+            StartProcessing(TimeSpan.FromSeconds(1 / _fps), () => DateTime.Now);
+
+            _currVideoFile = videoFilePath;
+        }
+
         /// <summary> Starts capturing and processing video frames. </summary>
         /// <param name="frameGrabDelay"> The frame grab delay. </param>
         /// <param name="timestampFn">    Function to generate the timestamp for each frame. This
@@ -197,6 +228,7 @@ namespace VideoFrameAnalyzer
             _resetTrigger = true;
             _frameGrabTimer.Reset();
             _analysisTaskQueue = new BlockingCollection<Task<NewResultEventArgs>>();
+            framesToAnalyzeQueue = new BlockingCollection<VideoFrame>();
 
             var timerIterations = 0;
 
@@ -251,17 +283,11 @@ namespace VideoFrameAnalyzer
                     LogMessage("Producer: new frame provided, should analyze? Frame num: {0}", meta.Index);
                     OnNewFrameProvided(vframe);
 
-                    if (_analysisPredicate(vframe))
+                    if (!vframe.Image.Empty() && _analysisPredicate(vframe))
                     {
                         LogMessage("Producer: analyzing frame");
 
-                        // Call the analysis function on a threadpool thread
-                        var analysisTask = DoAnalyzeFrame(vframe);
-
-                        LogMessage("Producer: adding analysis task to queue {0}", analysisTask.Id);
-
-                        // Push the frame onto the queue
-                        _analysisTaskQueue.Add(analysisTask);
+                        framesToAnalyzeQueue.Add(vframe);
                     }
                     else
                     {
@@ -274,7 +300,7 @@ namespace VideoFrameAnalyzer
                 }
 
                 LogMessage("Producer: stopping, destroy reader and timer");
-                _analysisTaskQueue.CompleteAdding();
+                framesToAnalyzeQueue.CompleteAdding();
 
                 // We reach this point by breaking out of the while loop. So we must be stopping. 
                 _reader.Dispose();
@@ -291,7 +317,7 @@ namespace VideoFrameAnalyzer
 
             _consumerTask = Task.Factory.StartNew(async () =>
             {
-                while (!_analysisTaskQueue.IsCompleted)
+                while (!_stopping && !_analysisTaskQueue.IsCompleted)
                 {
                     LogMessage("Consumer: waiting for task to get added");
 
@@ -324,6 +350,33 @@ namespace VideoFrameAnalyzer
                 }
 
                 LogMessage("Consumer: stopped");
+            }, TaskCreationOptions.LongRunning);
+
+            analyzerTask = Task.Factory.StartNew(() =>
+            {
+                while (!_stopping && !framesToAnalyzeQueue.IsCompleted)
+                {
+                    VideoFrame nextFrame = null;
+                    try
+                    {
+                        nextFrame = framesToAnalyzeQueue.Take();
+                    }
+                    catch (InvalidOperationException) { }
+
+                    if (nextFrame != null)
+                    {                        
+                        // Call the analysis function on a threadpool thread
+                        var analysisTask = DoAnalyzeFrame(nextFrame);
+
+                        LogMessage("Producer: adding analysis task to queue {0}", analysisTask.Id);
+
+                        // Push the frame onto the queue
+                        _analysisTaskQueue.Add(analysisTask);
+                        Thread.Sleep(6500);
+                    }
+                }
+
+                _analysisTaskQueue.CompleteAdding();
             }, TaskCreationOptions.LongRunning);
 
             // Set up a timer object that will trigger the frame-grab at a regular interval.
@@ -371,10 +424,22 @@ namespace VideoFrameAnalyzer
                 await _consumerTask;
                 _consumerTask = null;
             }
+
+            if (analyzerTask != null)
+            {
+                await analyzerTask;
+                analyzerTask = null;
+            }
             if (_analysisTaskQueue != null)
             {
                 _analysisTaskQueue.Dispose();
                 _analysisTaskQueue = null;
+            }
+
+            if (framesToAnalyzeQueue != null)
+            {
+                framesToAnalyzeQueue.Dispose();
+                framesToAnalyzeQueue = null;
             }
             _stopping = false;
 
