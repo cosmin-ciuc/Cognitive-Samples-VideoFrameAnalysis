@@ -53,7 +53,7 @@ namespace LiveCameraSample
 
         private static BitmapSource DrawOverlay(BitmapSource baseImage, Action<DrawingContext, double> drawAction)
         {
-            double annotationScale = baseImage.PixelHeight / 320;
+            double annotationScale = (double)baseImage.PixelHeight / 320;
 
             DrawingVisual visual = new DrawingVisual();
             DrawingContext drawingContext = visual.RenderOpen();

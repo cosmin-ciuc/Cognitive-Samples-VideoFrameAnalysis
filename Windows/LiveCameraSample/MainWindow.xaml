@@ -25,10 +25,11 @@
             <RowDefinition Height="35" />
         </Grid.RowDefinitions>
         <StackPanel Orientation="Horizontal" Grid.Row="0" Name="ButtonBar">
-            <ComboBox x:Name="CameraList" Width="100" Margin="5,5,0,5" Loaded="CameraList_Loaded" />
-            <Button Content="Start Camera" Padding="5,0" Margin="5,5,0,5" Click="StartButton_Click" />
-            <Button Content="Start Processing File" Padding="5,0" Margin="5,5,0,5" Click="StartFileButton_Click" />
-            <Button Content="Stop Processing" Padding="5,0" Margin="5,5,0,5" Click="StopButton_Click" />
+            <ComboBox x:Name="CameraList" Width="100" Margin="5,5,0,5" Loaded="CameraList_Loaded" Visibility="Collapsed" /> 
+            <Button Content="Start Camera" Padding="5,0" Margin="5,5,0,5" Click="StartButton_Click" Visibility="Collapsed" />
+            <Button Content="Process Still Image" Padding="5,0" Margin="5,5,0,5" Click="ButtonProcessStillImage_OnClick" />
+            <Button Content="Start Processing Video File" Padding="5,0" Margin="5,5,0,5" Click="StartFileButton_Click" />
+            <Button Content="Stop Processing Video File" Padding="5,0" Margin="5,5,0,5" Click="StopButton_Click" />
             <TextBlock VerticalAlignment="Center" Margin="15,5,0,5" Text="Mode:" />
             <ComboBox x:Name="ModeList" Width="100" Margin="5,5,0,5" Loaded="ModeList_Loaded" SelectionChanged="ModeList_SelectionChanged" />
         </StackPanel>

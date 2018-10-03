@@ -669,5 +669,76 @@ namespace LiveCameraSample
         {
             await _faceClient.TrainPersonGroupAsync("oana_si_pepe");
         }
+
+        private async void ButtonProcessStillImage_OnClick(object sender, RoutedEventArgs e)
+        {
+            var openFileDialog = new OpenFileDialog();
+            openFileDialog.Multiselect = false;
+            openFileDialog.Filter = "Image files (*.jpg; *.bmp; *.png)|*.jpg;*.bmp;*.png|All files (*.*)|*.*";
+            if (openFileDialog.ShowDialog() == true)
+            {
+                IdentifiedPersons.Clear();
+                if (!PersonsList.Any())
+                {
+                    var persons = await RetrievePersonsListAsync();
+                    foreach (var person in persons)
+                    {
+                        PersonsList.Add(person);
+                    }
+                }            
+
+                var bitmapImage = new BitmapImage();
+                bitmapImage.BeginInit();
+                bitmapImage.UriSource = new Uri(openFileDialog.FileName);
+                bitmapImage.EndInit();
+                BitmapSource visImage = bitmapImage;
+                
+                using (var imageFileStream = File.OpenRead(openFileDialog.FileName))
+                {
+                    var detectedFaces = await _faceClient.DetectAsync(imageFileStream);
+                    Properties.Settings.Default.FaceAPICallCount++;
+                    if (detectedFaces.Length > 0)
+                    {
+                        var celebrities = new Celebrity[detectedFaces.Length];
+                        var identifyResults = await _faceClient.IdentifyAsync(detectedFaces.Select(detectedFace => detectedFace.FaceId).ToArray(), "oana_si_pepe");
+                        Properties.Settings.Default.FaceAPICallCount++;
+                        for (int faceIdx = 0; faceIdx < detectedFaces.Length; faceIdx++)
+                        {
+                            var identifiedPerson = identifyResults.FirstOrDefault(ir => ir.FaceId == detectedFaces[faceIdx].FaceId && ir.Candidates.Any());
+                            if (identifiedPerson != null)
+                            {
+                                var firstCandidate = identifiedPerson.Candidates[0];
+                                celebrities[faceIdx] = new Celebrity
+                                {
+                                    Confidence = firstCandidate.Confidence,
+                                    Name = PersonsList.FirstOrDefault(person => person.PersonId == firstCandidate.PersonId)?.Name ?? string.Empty
+                                };
+                            }
+                            else
+                            {
+                                celebrities[faceIdx] = new Celebrity
+                                {
+                                    Confidence = 0.0,
+                                    Name = string.Empty
+                                };
+                            }
+                        }
+
+                        visImage = Visualization.DrawFaces(visImage, detectedFaces, null, celebrities.Select(celebrity => celebrity.Name).ToArray());
+                        foreach (var celebrity in celebrities)
+                        {
+                            IdentifiedPersons.Add(new IdentifiedPerson
+                            {
+                                Confidence = celebrity.Confidence,
+                                FrameIndex = 0,
+                                PersonName = celebrity.Name
+                            });
+                        }
+                    }
+                }
+                
+                RightImage.Source = visImage;
+            }
+        }
     }
 }
